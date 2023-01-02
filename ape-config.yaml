@@ -1,0 +1,5 @@
+name: dasy-erc721
+plugins:
+  - name: dasy
+  - name: alchemy
+  - name: etherscan

@@ -1,0 +1,113 @@
+(defevent Transfer
+    sender (indexed :address)
+    receiver (indexed :address)
+    tokenId (indexed :uint256))
+
+(defevent Approval
+    owner (indexed :address)
+    approved (indexed :address)
+    tokenId (indexed :uint256))
+
+(defevent ApprovalForAll
+    owner (indexed :address)
+    operator (indexed :address)
+    isApproved :bool)
+
+(definterface ERC721TokenReceiver
+    (defn onERC721Received
+          [:address operator
+           :address owner
+           :uint256 tokenId
+           (bytes 1024) data] :bytes4 :view))
+
+(defvars
+    name (public (string 128))
+    symbol (public (string 32))
+    getApproved (public (hash-map :uint256 :address))
+    isApprovedForAll (public (hash-map :address (hash-map :address :bool)))
+    _ownerOf (hash-map :uint256 :address)
+    _balanceOf (hash-map :address :uint256))
+
+(defn __init__ [(string 128) name (string 32) symbol] :external
+    (set-self name symbol))
+
+(defn supportsInterface [:bytes4 interfaceId] :bool [:external :view]
+    (or (== interfaceId 0x01ffc9a7)
+        (== interfaceId 0x80ac58cd)
+        (== interfaceId 0x5b5e139f))) ;; Couldn't iterate over an array of constants here...
+
+(defn tokenURI [:uint256 tokenId] (string 4096) [:external view]
+  (concat (self/_baseURI) (uint2str tokenId)))
+
+(defn contractURI [] (string 4096) [:external view] "https://example.com/metadata/contract.json")
+
+(defn ownerOf [:uint256 tokenId] :address [:external :view]
+    (defvar tokenOwner :address (get-at self/_ownerOf tokenId))
+    (assert (!= tokenOwner (empty :address)) "Not minted")
+    tokenOwner)
+
+(defn balanceOf [:address owner] :uint256 [:external :view]
+    (assert (!= (empty :address) owner) "Zero address")
+    (get-at self/_balanceOf owner))
+
+(defn mint [:address receiver :uint256 tokenId] :external
+    (self/_mint receiver tokenId))
+
+(defn approve [:address spender :uint256 tokenId] :external
+    (defvar tokenOwner :address (get-at self/_ownerOf tokenId))
+    (assert (or (== msg/sender tokenOwner)
+                (get-at self/isApprovedForAll tokenOwner msg/sender))
+            "Not approved")
+
+    (doto self/getApproved
+        (set-at tokenId spender))
+
+    (log (Approval tokenOwner spender tokenId)))
+
+(defn setApprovalForAll [:address operator :bool approved] :external
+    (doto self/isApprovedForAll
+        (set-at msg/sender operator approved))
+
+    (log (ApprovalForAll msg/sender operator approved)))
+
+(defn transferFrom [:address owner :address receiver :uint256 tokenId] :external
+    (self/_transferFrom owner receiver tokenId))
+
+(defn safeTransferFrom [:address owner :address receiver :uint256 tokenId (bytes 1024) data] :external
+    (self/_transferFrom owner receiver tokenId)
+    (if receiver/is_contract
+        (assert (== (.onERC721Received (ERC721TokenReceiver receiver) msg/sender owner tokenId data)
+                    0x150b7a02) ;; Can't get method_id to return a bytes4 instead of Bytes[4] here
+                "Unsafe receiver")))
+
+(defn _baseURI [] (string 29) [:internal view] "https://example.com/metadata/")
+
+(defn _mint [:address receiver :uint256 tokenId] :internal
+    (assert (!= receiver (empty :address)) "Invalid receiver")
+    (assert (== (get-at self/_ownerOf tokenId) (empty :address)) "Already minted")
+
+    (vyper "self._balanceOf[receiver] +=1")
+    (doto self/_ownerOf
+        (set-at tokenId receiver))
+
+    (log (Transfer (empty :address) receiver tokenId)))
+
+(defn _transferFrom [:address owner :address receiver :uint256 tokenId] :internal
+    (assert (== owner (get-at self/_ownerOf tokenId)) "Wrong owner")
+    (assert (!= receiver (empty :address)) "Invalid receiver")
+    (assert (or (== msg/sender owner)
+                (get-at self/isApprovedForAll owner msg/sender)
+                (== msg/sender (get-at self/getApproved tokenId)))
+            "Not approved")
+
+    (vyper "self._balanceOf[owner] -= 1")
+    (vyper "self._balanceOf[receiver] += 1")
+
+    (doto self/_ownerOf
+        (set-at tokenId receiver))
+
+    (defvar emptyAddr :address (empty :address))
+    (doto self/getApproved
+        (set-at tokenId emptyAddr)) ;; (empty :address) doesn't work here...
+
+    (log (Transfer owner receiver tokenId)))
