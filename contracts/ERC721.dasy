@@ -1,3 +1,5 @@
+; vim: set ft=clojure:
+
 (defevent Transfer
     sender (indexed :address)
     receiver (indexed :address)
